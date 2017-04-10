@@ -1,7 +1,9 @@
 package cacheh
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -28,25 +30,36 @@ func initFileCacheDir(dir string) error {
 	return nil
 }
 
-func newFileCache(dir string) (Cache, error) {
+func newFileCache(dir string, query map[string]string) (Cache, error) {
 	err := initFileCacheDir(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	return &fileCache{dir, new(sync.RWMutex)}, nil
+	_, useGzip := query["gzip"]
+
+	return &fileCache{dir, useGzip, new(sync.RWMutex)}, nil
 }
 
 type fileCache struct {
-	dir string
+	dir     string
+	useGzip bool
 	*sync.RWMutex
 }
 
 func (fc *fileCache) keyPath(key string) string {
-	return filepath.Join(fc.dir, key)
+	p := filepath.Join(fc.dir, key)
+	if fc.useGzip {
+		p = p + ".gz"
+	}
+	return p
 }
 
 func (fc *fileCache) Get(key string) ([]byte, error) {
+	var (
+		f   io.ReadCloser
+		err error
+	)
 	// it is the caller's responsibility to provide sanitized strings - but
 	// we still don't want to allow unsafed strings, so we will make sure
 	// it's already sanitized and return an error if not.
@@ -59,13 +72,22 @@ func (fc *fileCache) Get(key string) ([]byte, error) {
 
 	path := fc.keyPath(key)
 
-	f, err := os.Open(path)
+	f, err = os.Open(path)
 	if err != nil && os.IsNotExist(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, ErrCacheOperation{"read", key, err}
 	}
 	defer f.Close()
+
+	if fc.useGzip {
+		f, err = gzip.NewReader(f)
+		if err != nil {
+			return nil, ErrCacheOperation{"read", key, err}
+		}
+
+		defer f.Close()
+	}
 
 	b, err := ioutil.ReadAll(f)
 	if err != nil {
@@ -75,6 +97,10 @@ func (fc *fileCache) Get(key string) ([]byte, error) {
 }
 
 func (fc *fileCache) Set(key string, val []byte) error {
+	var (
+		f   io.WriteCloser
+		err error
+	)
 	// it is the caller's responsibility to provide sanitized strings - but
 	// we still don't want to allow unsafed strings, so we will make sure
 	// it's already sanitized and return an error if not.
@@ -86,7 +112,18 @@ func (fc *fileCache) Set(key string, val []byte) error {
 
 	path := fc.keyPath(key)
 
-	err := ioutil.WriteFile(path, val, 0600)
+	f, err = os.Create(path)
+	if err != nil {
+		return ErrCacheOperation{"write", key, err}
+	}
+	defer f.Close()
+
+	if fc.useGzip {
+		f = gzip.NewWriter(f)
+		defer f.Close()
+	}
+
+	_, err = f.Write(val)
 
 	if err != nil {
 		return ErrCacheOperation{"write", key, err}
