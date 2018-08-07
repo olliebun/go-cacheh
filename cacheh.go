@@ -6,9 +6,11 @@ import (
 )
 
 type Cache interface {
-	Get(string) ([]byte, error) // returns nil if key not found
-	Set(string, []byte) error
-	Delete(string) error // not an error if the key was not found
+	Get(key string) ([]byte, error) // returns nil if key not found
+	Set(key string, value []byte) error
+	Delete(key string) error // not an error if the key was not found
+
+	WithKeyPrefix(keyPrefix string) Cache // get a Cache scoped to a key prefix
 }
 
 func GetDirCacheDsn(dir string) string {

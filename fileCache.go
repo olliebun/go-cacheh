@@ -38,12 +38,18 @@ func newFileCache(dir string, query map[string]string) (Cache, error) {
 
 	_, useGzip := query["gzip"]
 
-	return &fileCache{dir, useGzip, new(sync.RWMutex)}, nil
+	return &fileCache{
+		dir:       dir,
+		useGzip:   useGzip,
+		keyPrefix: "",
+		RWMutex:   new(sync.RWMutex),
+	}, nil
 }
 
 type fileCache struct {
-	dir     string
-	useGzip bool
+	dir       string
+	useGzip   bool
+	keyPrefix string
 	*sync.RWMutex
 }
 
@@ -55,7 +61,13 @@ func (fc *fileCache) keyPath(key string) string {
 	return p
 }
 
+func (fc *fileCache) getPrefixedKey(key string) string {
+	return fc.keyPrefix + key
+}
+
 func (fc *fileCache) Get(key string) ([]byte, error) {
+	key = fc.getPrefixedKey(key)
+
 	var (
 		f   io.ReadCloser
 		err error
@@ -97,6 +109,8 @@ func (fc *fileCache) Get(key string) ([]byte, error) {
 }
 
 func (fc *fileCache) Set(key string, val []byte) error {
+	key = fc.getPrefixedKey(key)
+
 	var (
 		f   io.WriteCloser
 		err error
@@ -133,6 +147,8 @@ func (fc *fileCache) Set(key string, val []byte) error {
 }
 
 func (fc *fileCache) Delete(key string) error {
+	key = fc.getPrefixedKey(key)
+
 	// it is the caller's responsibility to provide sanitized strings - but
 	// we still don't want to allow unsafed strings, so we will make sure
 	// it's already sanitized and return an error if not.
@@ -154,6 +170,18 @@ func (fc *fileCache) Delete(key string) error {
 		return ErrCacheOperation{"delete", key, err}
 	}
 	return err
+}
+
+func (fc *fileCache) WithKeyPrefix(keyPrefix string) Cache {
+	return &fileCache{
+		dir:       fc.dir,
+		useGzip:   fc.useGzip,
+		keyPrefix: keyPrefix,
+		// note that we reuse the mutex - a caller requesting a cache
+		// scoped to a key prefix should still benefit from the same
+		// locking
+		RWMutex: fc.RWMutex,
+	}
 }
 
 func isSafeFileCacheKey(key string) bool {
